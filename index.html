@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Wallet</title>
+<style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
+    header { background: #4CAF50; color: white; padding: 10px; text-align: center; font-size: 1.5em; font-weight: bold; }
+    .container { padding: 15px; max-width: 900px; margin: auto; }
+    .dropdown { background: white; margin-bottom: 10px; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; }
+    .dropdown-header { padding: 10px; background: #eee; cursor: pointer; display: flex; justify-content: space-between; font-weight: bold; }
+    .dropdown-content { display: none; padding: 10px; }
+    .item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #ddd; align-items: center; }
+    .delete-btn { cursor: pointer; font-weight: bold; margin-right: 8px; font-size: 12px; color: black; }
+    .value { font-weight: bold; }
+    .floating-btn { position: fixed; bottom: 20px; right: 20px; background: #4CAF50; color: white; border-radius: 50%; width: 60px; height: 60px; font-size: 2em; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0px 4px 6px rgba(0,0,0,0.2); }
+    .popup-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); justify-content: center; align-items: center; z-index: 1000; }
+    .popup { background: white; padding: 20px; border-radius: 8px; width: 300px; }
+    .popup button { width: 100%; padding: 10px; margin: 5px 0; border: none; cursor: pointer; font-size: 1em; border-radius: 5px; background: #4CAF50; color: white; }
+    .popup input { width: calc(100% - 10px); padding: 8px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; }
+    .daily-view { background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
+    .daily-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #ddd; }
+    .today { background-color: #fff8b3; border-radius: 4px; } /* Highlight today */
+</style>
+</head>
+<body>
+
+<header>My Wallet</header>
+
+<div class="container">
+    <div id="remaining-budget" style="font-size: 1.2em; font-weight: bold; text-align: center; margin-bottom: 10px;">
+        <span style="color:black;">Remaining Budget:</span> <span id="remaining-budget-value">£0.00</span>
+    </div>
+
+    <div class="dropdown" id="daily-expenses-dropdown">
+        <div class="dropdown-header">Daily Expenses <span id="daily-expenses-total">£0.00</span></div>
+        <div class="dropdown-content" id="daily-expenses-list"></div>
+    </div>
+
+    <div class="dropdown" id="recurring-expenses-dropdown">
+        <div class="dropdown-header">Recurring Expenses <span id="recurring-expenses-total">£0.00</span></div>
+        <div class="dropdown-content" id="recurring-expenses-list"></div>
+    </div>
+
+    <div class="dropdown" id="income-dropdown">
+        <div class="dropdown-header">Income <span id="income-total">£0.00</span></div>
+        <div class="dropdown-content" id="income-list"></div>
+    </div>
+
+    <div class="dropdown" id="daily-view-dropdown">
+        <div class="dropdown-header">Daily View</div>
+        <div class="dropdown-content" id="daily-spending-view"></div>
+    </div>
+</div>
+
+<div class="floating-btn" id="add-btn">+</div>
+
+<div class="popup-overlay" id="popup-overlay">
+    <div class="popup" id="popup-content">
+        <button data-type="daily">Daily Expense</button>
+        <button data-type="recurring">Recurring Expense</button>
+        <button data-type="income">Income</button>
+    </div>
+</div>
+
+<script>
+const storageKey = "myWalletData";
+let data = JSON.parse(localStorage.getItem(storageKey)) || { daily: [], recurring: [], income: [] };
+const remainingBudgetValueEl = document.getElementById("remaining-budget-value");
+const popupOverlay = document.getElementById("popup-overlay");
+const popupContent = document.getElementById("popup-content");
+
+function saveData() {
+    localStorage.setItem(storageKey, JSON.stringify(data));
+    render();
+}
+
+function toggleDropdown(header, content) {
+    content.style.display = content.style.display === "block" ? "none" : "block";
+}
+
+function createItemRow(name, value, type, date, index) {
+    const itemDiv = document.createElement("div");
+    itemDiv.classList.add("item");
+
+    const deleteBtn = document.createElement("span");
+    deleteBtn.textContent = "✖";
+    deleteBtn.classList.add("delete-btn");
+    deleteBtn.onclick = () => {
+        data[type].splice(index, 1);
+        saveData();
+    };
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = name;
+    nameSpan.style.flex = "1";
+
+    const valueSpan = document.createElement("span");
+
+    if(type === "daily" || type === "recurring") {
+        value = -Math.abs(parseFloat(value));
+    } else {
+        value = parseFloat(value);
+    }
+
+    valueSpan.textContent = `£${parseFloat(value).toFixed(2)}`;
+
+    if(value > 0) valueSpan.style.color = 'green';
+    else if(value < 0) valueSpan.style.color = 'red';
+    else valueSpan.style.color = 'black';
+
+    itemDiv.appendChild(deleteBtn);
+    itemDiv.appendChild(nameSpan);
+    itemDiv.appendChild(valueSpan);
+
+    return itemDiv;
+}
+
+function render() {
+    const dailyList = document.getElementById("daily-expenses-list");
+    const recurringList = document.getElementById("recurring-expenses-list");
+    const incomeList = document.getElementById("income-list");
+
+    dailyList.innerHTML = "";
+    recurringList.innerHTML = "";
+    incomeList.innerHTML = "";
+
+    let dailyTotal = 0, recurringTotal = 0, incomeTotal = 0;
+
+    data.daily.forEach((item, i) => {
+        dailyList.appendChild(createItemRow(item.name, item.value, "daily", item.date, i));
+        dailyTotal += -Math.abs(parseFloat(item.value));
+    });
+
+    data.recurring.forEach((item, i) => {
+        recurringList.appendChild(createItemRow(item.name, item.value, "recurring", item.date, i));
+        recurringTotal += -Math.abs(parseFloat(item.value));
+    });
+
+    data.income.forEach((item, i) => {
+        incomeList.appendChild(createItemRow(item.name, item.value, "income", item.date, i));
+        incomeTotal += parseFloat(item.value);
+    });
+
+    function colorByValue(val) {
+        if (val > 0) return 'green';
+        if (val < 0) return 'red';
+        return 'black';
+    }
+
+    const dailyTotalEl = document.getElementById("daily-expenses-total");
+    dailyTotalEl.textContent = `£${dailyTotal.toFixed(2)}`;
+    dailyTotalEl.style.color = colorByValue(dailyTotal);
+
+    const recurringTotalEl = document.getElementById("recurring-expenses-total");
+    recurringTotalEl.textContent = `£${recurringTotal.toFixed(2)}`;
+    recurringTotalEl.style.color = colorByValue(recurringTotal);
+
+    const incomeTotalEl = document.getElementById("income-total");
+    incomeTotalEl.textContent = `£${incomeTotal.toFixed(2)}`;
+    incomeTotalEl.style.color = colorByValue(incomeTotal);
+
+    const remaining = incomeTotal + recurringTotal + dailyTotal;
+    remainingBudgetValueEl.textContent = `£${remaining.toFixed(2)}`;
+    remainingBudgetValueEl.style.color = colorByValue(remaining);
+
+    renderDailySpendingView(remaining, incomeTotal + recurringTotal);
+}
+
+function renderDailySpendingView(remainingBudget, totalBudget) {
+    const view = document.getElementById("daily-spending-view");
+    view.innerHTML = "";
+    const now = new Date();
+    const today = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+
+    const basePerDay = totalBudget / daysInMonth;
+    const dailyAmounts = [];
+
+    // Step 1: Create cumulative base amounts
+    for(let i=0; i<daysInMonth; i++){
+        dailyAmounts[i] = i === 0 ? basePerDay : dailyAmounts[i-1] + basePerDay;
+    }
+
+    // Step 2: Subtract daily expenses and propagate forward
+    data.daily.forEach(item => {
+        const dayIndex = new Date(item.date).getDate() - 1;
+        for(let i = dayIndex; i < daysInMonth; i++){
+            dailyAmounts[i] -= parseFloat(item.value);
+        }
+    });
+
+    // Step 3: Render each day
+    dailyAmounts.forEach((amount, idx) => {
+        const div = document.createElement("div");
+        div.classList.add("daily-item");
+
+        // Highlight today
+        if(idx+1 === today) div.classList.add("today");
+
+        // Color logic
+        let color;
+        if(idx+1 < today) color = 'grey'; // previous days in grey
+        else color = amount > 0 ? 'green' : amount < 0 ? 'red' : 'black';
+
+        div.innerHTML = `<span style="color:${color}">${idx+1}</span><span style="color:${color}">£${amount.toFixed(2)}</span>`;
+        view.appendChild(div);
+    });
+
+    const dailyViewHeader = document.querySelector("#daily-view-dropdown .dropdown-header");
+    dailyViewHeader.textContent = `Daily View`;
+    const remainingSpan = document.createElement("span");
+    const remainingTotal = dailyAmounts[daysInMonth-1];
+    remainingSpan.textContent = `£${remainingTotal.toFixed(2)}`;
+    remainingSpan.style.color = remainingTotal > 0 ? 'green' : remainingTotal < 0 ? 'red' : 'black';
+    dailyViewHeader.appendChild(remainingSpan);
+}
+
+document.querySelectorAll(".dropdown-header").forEach(header => {
+    header.addEventListener("click", () => {
+        toggleDropdown(header, header.nextElementSibling);
+    });
+});
+
+document.getElementById("add-btn").onclick = () => {
+    popupOverlay.style.display = "flex";
+    popupContent.innerHTML = `
+        <button data-type="daily">Daily Expense</button>
+        <button data-type="recurring">Recurring Expense</button>
+        <button data-type="income">Income</button>
+    `;
+    popupContent.querySelectorAll("button").forEach(btn => {
+        btn.onclick = () => {
+            const type = btn.dataset.type;
+            popupContent.innerHTML = `
+                <input placeholder="Name" id="name-input">
+                <input type="date" id="date-input" value="${new Date().toISOString().split('T')[0]}">
+                <input placeholder="Value" id="value-input">
+                <button id="save-btn">Save</button>
+            `;
+
+            const valueInput = document.getElementById("value-input");
+            valueInput.addEventListener("input", (e) => {
+                e.target.value = e.target.value.replace(/[^0-9.]/g,'');
+                if(e.target.value && !e.target.value.startsWith("£")){
+                    e.target.value = "£" + e.target.value.replace(/£/g,"");
+                }
+            });
+
+            document.getElementById("save-btn").onclick = () => {
+                const name = document.getElementById("name-input").value;
+                const date = document.getElementById("date-input").value;
+                let value = document.getElementById("value-input").value.replace("£","");
+                if(name && date && value){
+                    data[type].push({ name, date, value });
+                    saveData();
+                    popupOverlay.style.display = "none";
+                }
+            };
+        };
+    });
+};
+
+popupOverlay.addEventListener("click", (e) => {
+    if(e.target === popupOverlay){
+        popupOverlay.style.display = "none";
+    }
+});
+
+render();
+</script>
+</body>
+</html>
