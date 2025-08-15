@@ -21,10 +21,9 @@
     .popup input, .popup select { width: calc(100% - 10px); padding: 8px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; }
     .daily-view { background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
     .daily-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #ddd; }
-    .today { background-color: #fff8b3; border-radius: 4px; } /* Highlight today */
-    .month-display { display: flex; align-items: center; cursor: pointer; font-weight: bold; font-size: 1em; } /* font-size updated */
-    .month-display span { margin-left: 5px; } /* removed smaller font */
-    /* Month select popup style */
+    .today { background-color: #fff8b3; border-radius: 4px; }
+    .month-display { display: flex; align-items: center; cursor: pointer; font-weight: bold; font-size: 1em; }
+    .month-display span { margin-left: 5px; }
     #month-popup-select { width: 200px; max-height: 200px; overflow-y: auto; padding: 5px; border-radius: 5px; border: 1px solid #ddd; font-size: 1em; background: white; position: absolute; z-index: 1001; }
 </style>
 </head>
@@ -122,6 +121,58 @@ function createItemRow(name, value, type, date, index) {
     return itemDiv;
 }
 
+// Helper function to get array of dates between two dates
+function getDatesBetween(start, end) {
+    const dates = [];
+    const dt = new Date(start);
+    while(dt <= end){
+        dates.push(new Date(dt));
+        dt.setDate(dt.getDate() + 1);
+    }
+    return dates;
+}
+
+// Calculate daily budgets with carryover — UPDATED for 31-day rolling from payday
+function calculateDailyBudgets() {
+    const dailyBudgets = {};
+    if(data.income.length === 0) return dailyBudgets;
+
+    const income = data.income[0]; // assume single income
+    const payday = new Date(income.date);
+    const periodStart = new Date(payday);
+    const periodEnd = new Date(payday);
+    periodEnd.setDate(periodEnd.getDate() + 30); // 31-day period including payday
+
+    // Get all dates in the 31-day period
+    const days = getDatesBetween(periodStart, periodEnd);
+
+    // Sum recurring expenses within this period
+    let recurringTotal = 0;
+    data.recurring.forEach(exp => {
+        const start = new Date(exp.startDate);
+        const end = exp.endDate ? new Date(exp.endDate) : periodEnd;
+        if(end >= periodStart && start <= periodEnd){
+            recurringTotal += parseFloat(exp.value);
+        }
+    });
+
+    const monthlyIncome = parseFloat(income.value);
+    const netIncome = monthlyIncome - recurringTotal;
+    const baseDailyBudget = netIncome / days.length;
+
+    let previousCarryOver = 0;
+    days.forEach(d => {
+        const dateStr = d.toISOString().split("T")[0];
+        const spentRecord = data.daily.find(rec => rec.date === dateStr);
+        const spent = spentRecord ? Math.abs(parseFloat(spentRecord.value)) : 0;
+        let budget = baseDailyBudget + previousCarryOver - spent;
+        dailyBudgets[dateStr] = budget;
+        previousCarryOver = budget;
+    });
+
+    return dailyBudgets;
+}
+
 function render() {
     const dailyList = document.getElementById("daily-expenses-list");
     const recurringList = document.getElementById("recurring-expenses-list");
@@ -188,40 +239,33 @@ function renderDailySpendingView() {
     view.innerHTML = "";
 
     const today = new Date();
-    today.setHours(0,0,0,0); // Fix for highlight
-    const startDate = new Date(currentYear, currentMonth, 1);
-    const endDate = new Date(currentYear, currentMonth + 1, 0);
-    const allDates = [];
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) allDates.push(new Date(d));
-    const dailyAmounts = allDates.map(() => 0);
+    today.setHours(0,0,0,0);
 
-    data.income.forEach(income => {
-        const periodStart = new Date(income.date);
-        const periodEnd = new Date(periodStart.getFullYear(), periodStart.getMonth()+1, periodStart.getDate()-1);
-        const totalDays = Math.ceil((periodEnd - periodStart)/86400000) + 1;
-        const dailyValue = parseFloat(income.value)/totalDays;
-        allDates.forEach((date, idx) => {
-            if(date >= periodStart && date <= periodEnd) dailyAmounts[idx] += dailyValue;
-        });
-    });
+    let startDate = new Date(currentYear, currentMonth, 1);
+    let endDate = new Date(currentYear, currentMonth + 1, 0);
+    const allDates = getDatesBetween(startDate, endDate);
 
-    data.daily.forEach(item => {
-        const d = new Date(item.date);
-        d.setHours(0,0,0,0);
-        allDates.forEach((date, idx) => {
-            if(date.getTime() === d.getTime()) dailyAmounts[idx] += -Math.abs(parseFloat(item.value));
-        });
-    });
+    const dailyBudgets = calculateDailyBudgets();
 
-    allDates.forEach((date, idx) => {
+    allDates.forEach(date => {
         const dateStr = date.toISOString().split("T")[0];
+        const spentRecord = data.daily.find(rec => rec.date === dateStr);
+        const spent = spentRecord ? -parseFloat(spentRecord.value) : 0;
+        const budgetDisplay = date < today ? spent : (dailyBudgets[dateStr] || 0);
+
         const div = document.createElement("div");
         div.classList.add("daily-item");
         if(date.getTime() === today.getTime()) div.classList.add("today");
 
-        const color = date < today ? 'grey' : dailyAmounts[idx] > 0 ? 'green' : dailyAmounts[idx] < 0 ? 'red' : 'black';
+        let color;
+        if(date < today) {
+            color = 'grey'; // Past dates grey
+        } else {
+            color = budgetDisplay > 0 ? 'green' : budgetDisplay < 0 ? 'red' : 'black';
+        }
+
         const options = { day: '2-digit', month: 'short', year: '2-digit' };
-        div.innerHTML = `<span style="color:${color}">${date.toLocaleDateString('en-GB', options)}</span><span style="color:${color}">£${dailyAmounts[idx].toFixed(2)}</span>`;
+        div.innerHTML = `<span style="color:${color}">${date.toLocaleDateString('en-GB', options)}</span><span style="color:${color}">£${budgetDisplay.toFixed(2)}</span>`;
         view.appendChild(div);
     });
 
@@ -229,7 +273,7 @@ function renderDailySpendingView() {
     monthText.textContent = startDate.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
 
     const totalSpan = document.getElementById("daily-view-total");
-    totalSpan.textContent = remainingBudgetValueEl.textContent; // updated
+    totalSpan.textContent = remainingBudgetValueEl.textContent;
     totalSpan.style.color = remainingBudgetValueEl.style.color;
 }
 
@@ -242,9 +286,9 @@ monthDisplay.addEventListener("click", (e) => {
     if(monthPopupSelect) return;
     monthPopupSelect = document.createElement("select");
     monthPopupSelect.id = "month-popup-select";
-    monthPopupSelect.size = 5; // visible items
-    const pastMonths = 24; // previous 24 months
-    const futureMonths = 36; // next 36 months
+    monthPopupSelect.size = 5;
+    const pastMonths = 24;
+    const futureMonths = 36;
     for(let i=-pastMonths; i<futureMonths; i++){
         const dt = new Date(currentYear, currentMonth + i, 1);
         const option = document.createElement("option");
@@ -304,6 +348,18 @@ document.getElementById("add-btn").onclick = () => {
                     <input type="date" id="start-input" value="${new Date().toISOString().split('T')[0]}">
                     <label>End Date (optional)</label>
                     <input type="date" id="end-input">
+                    <button id="save-btn">Save</button>
+                `;
+            } else if(type === "income"){
+                if(data.income.length >= 1){
+                    alert("Only one income allowed.");
+                    popupOverlay.style.display = "none";
+                    return;
+                }
+                popupContent.innerHTML = `
+                    <input placeholder="Name" id="name-input">
+                    <input type="date" id="date-input" value="${new Date().toISOString().split('T')[0]}">
+                    <input placeholder="Value" id="value-input">
                     <button id="save-btn">Save</button>
                 `;
             } else {
